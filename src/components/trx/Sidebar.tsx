@@ -7,17 +7,19 @@ import {
   Crown,
   Terminal,
   Settings,
+  Sparkles,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import type { ComponentType } from "react";
 
-type Panel = "explorer" | "search" | "scm" | "extensions" | "settings";
+type Panel = "explorer" | "search" | "scm" | "extensions" | "copilot" | "settings";
 
 const items: { id: Panel; icon: ComponentType<{ className?: string }> }[] = [
   { id: "explorer", icon: Files },
   { id: "search", icon: Search },
   { id: "scm", icon: GitBranch },
   { id: "extensions", icon: Blocks },
+  { id: "copilot", icon: Sparkles },
 ];
 
 export function Sidebar({
