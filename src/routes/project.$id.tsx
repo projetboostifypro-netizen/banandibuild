@@ -5,6 +5,7 @@ import { ExplorerPanel } from "@/components/trx/panels/ExplorerPanel";
 import { SearchPanel } from "@/components/trx/panels/SearchPanel";
 import { ExtensionsPanel } from "@/components/trx/panels/ExtensionsPanel";
 import { SourceControlPanel } from "@/components/trx/panels/SourceControlPanel";
+import { AIPanel } from "@/components/trx/panels/AIPanel";
 import { Editor } from "@/components/trx/Editor";
 import { Preview } from "@/components/trx/Preview";
 import { useProjectStore } from "@/store/projects";
@@ -73,6 +74,7 @@ function ProjectPage() {
           {activePanel === "search" && <SearchPanel project={project} />}
           {activePanel === "scm" && <SourceControlPanel project={project} />}
           {activePanel === "extensions" && <ExtensionsPanel />}
+          {activePanel === "copilot" && <AIPanel project={project} />}
           {activePanel === "settings" && (
             <div className="p-4 text-sm text-muted-foreground">
               Settings coming soon.

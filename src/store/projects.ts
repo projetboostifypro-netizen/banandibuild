@@ -27,7 +27,7 @@ export type Project = {
 type EditorState = {
   openFileIds: string[];
   activeFileId: string | null;
-  activePanel: "explorer" | "search" | "scm" | "extensions" | "settings";
+  activePanel: "explorer" | "search" | "scm" | "extensions" | "copilot" | "settings";
   showPreview: boolean;
 };
 
