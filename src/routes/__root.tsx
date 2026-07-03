@@ -77,14 +77,21 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Lovable App" },
-      { name: "description", content: "Lovable Generated Project" },
-      { name: "author", content: "Lovable" },
-      { property: "og:title", content: "Lovable App" },
-      { property: "og:description", content: "Lovable Generated Project" },
+      { title: "Trx IDE — Mobile-first Code Editor" },
+      {
+        name: "description",
+        content:
+          "Trx IDE is a premium mobile-first code editor. Create, clone, edit and preview projects on the go.",
+      },
+      { name: "author", content: "Trx" },
+      { property: "og:title", content: "Trx IDE — Mobile-first Code Editor" },
+      {
+        property: "og:description",
+        content: "Premium mobile IDE with editor, preview, extensions and GitHub source control.",
+      },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
-      { name: "twitter:site", content: "@Lovable" },
+      { name: "theme-color", content: "#0f1729" },
     ],
     links: [
       {
