@@ -1,7 +1,17 @@
 import { useState } from "react";
-import { ChevronDown, Plus, Upload, FileCode, Trash2, Pencil } from "lucide-react";
+import {
+  ChevronDown,
+  Plus,
+  Download,
+  FileCode,
+  Trash2,
+  Pencil,
+  Save,
+} from "lucide-react";
 import type { Project } from "@/store/projects";
 import { useProjectStore } from "@/store/projects";
+import { saveTextToDevice, saveZipToDevice } from "@/lib/device-save";
+import { toast } from "sonner";
 
 export function ExplorerPanel({ project }: { project: Project }) {
   const { openFile, addFile, deleteFile, renameFile } = useProjectStore();
@@ -15,8 +25,23 @@ export function ExplorerPanel({ project }: { project: Project }) {
           EXPLORER
         </div>
         <div className="flex items-center gap-1 text-muted-foreground">
-          <button className="rounded p-1 hover:bg-secondary hover:text-foreground" aria-label="Upload">
-            <Upload className="h-4 w-4" />
+          <button
+            className="rounded p-1 hover:bg-secondary hover:text-foreground"
+            aria-label="Export project as ZIP"
+            title="Save project to device (.zip)"
+            onClick={async () => {
+              try {
+                const msg = await saveZipToDevice(
+                  `${project.name}.zip`,
+                  project.files.map((f) => ({ path: f.path, content: f.content })),
+                );
+                toast.success(msg);
+              } catch (e) {
+                toast.error(`Save failed: ${(e as Error).message}`);
+              }
+            }}
+          >
+            <Download className="h-4 w-4" />
           </button>
           <button
             className="rounded p-1 hover:bg-secondary hover:text-foreground"
@@ -61,6 +86,21 @@ export function ExplorerPanel({ project }: { project: Project }) {
                   {f.name}
                 </button>
               )}
+              <button
+                onClick={async () => {
+                  try {
+                    const msg = await saveTextToDevice(f.name, f.content);
+                    toast.success(msg);
+                  } catch (e) {
+                    toast.error(`Save failed: ${(e as Error).message}`);
+                  }
+                }}
+                className="opacity-0 group-hover:opacity-100"
+                aria-label="Save file to device"
+                title="Save file to device"
+              >
+                <Save className="h-3.5 w-3.5 text-muted-foreground hover:text-primary" />
+              </button>
               <button
                 onClick={() => {
                   setRenaming(f.id);

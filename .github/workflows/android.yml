@@ -34,22 +34,11 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build web app (static)
-        env:
-          NITRO_PRESET: static
-        run: bun run build
+      - name: Build static SPA for mobile
+        run: bun run build:mobile
 
-      - name: Prepare dist for Capacitor
-        run: |
-          if [ -d .output/public ]; then
-            rm -rf dist
-            cp -r .output/public dist
-          elif [ -d dist/client ]; then
-            mv dist/client dist_tmp
-            rm -rf dist
-            mv dist_tmp dist
-          fi
-          ls -la dist | head -30
+      - name: Verify dist output
+        run: ls -la dist | head -30
 
       - name: Add Android platform
         run: |
