@@ -11,8 +11,8 @@ function findFile(files: ProjectFile[], name: string): ProjectFile | undefined {
 }
 
 /**
- * Resolve a src/href attribute to a ProjectFile.
- * Handles: "./foo.css", "foo.css", "/src/foo.tsx", "src/foo.tsx"
+ * Resolve a src/href relative path to a ProjectFile.
+ * Handles: "./foo.css", "foo.css", "/src/foo.tsx", "src/App.css"
  */
 function resolveRef(ref: string, files: ProjectFile[]): ProjectFile | undefined {
   const clean = ref.replace(/^\.\//, "").replace(/^\//, "");
@@ -25,61 +25,95 @@ function resolveRef(ref: string, files: ProjectFile[]): ProjectFile | undefined 
 }
 
 /**
- * Inline all external <link rel="stylesheet"> and <script src="..."> tags.
- * Keeps type="module" scripts from Vite templates working by inlining them too.
+ * Detect if index.html is a Vite-style scaffold (body = only <div id="root"> + scripts)
+ * vs a real HTML page with actual content.
  */
-function inlineExternalRefs(html: string, files: ProjectFile[]): string {
-  // <link rel="stylesheet" href="..."> or <link href="..." rel="stylesheet">
-  html = html.replace(
-    /<link\b([^>]*)\/?>/gi,
-    (tag, attrs: string) => {
-      const relMatch = attrs.match(/rel=["']stylesheet["']/i);
-      const hrefMatch = attrs.match(/href=["']([^"']+)["']/i);
-      if (!relMatch || !hrefMatch) return tag; // keep non-stylesheet links
-      const f = resolveRef(hrefMatch[1], files);
-      return f ? `<style>/* ${f.name} */\n${f.content}\n</style>` : "";
-    },
-  );
-
-  // <script src="..." [type="module"]></script>
-  html = html.replace(
-    /<script\b([^>]*)><\/script>/gi,
-    (tag, attrs: string) => {
-      const srcMatch = attrs.match(/src=["']([^"']+)["']/i);
-      if (!srcMatch) return tag; // inline script — keep as-is
-      const src = srcMatch[1];
-      // Keep CDN/external URLs
-      if (/^https?:\/\/|^\/\//.test(src)) return tag;
-      const f = resolveRef(src, files);
-      // Strip type="module" — we inline the content as plain script
-      return f ? `<script>/* ${f.name} */\n${f.content}\n</script>` : "";
-    },
-  );
-
-  return html;
+function isViteScaffold(htmlContent: string): boolean {
+  const bodyMatch = htmlContent.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (!bodyMatch) return false;
+  const bodyInner = bodyMatch[1]
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "") // strip script tags
+    .replace(/<script\b[^>]*><\/script>/gi, "")          // strip self-closing scripts
+    .replace(/\s+/g, " ")
+    .trim();
+  // After stripping scripts, a scaffold only has <div id="root"></div> or is empty
+  const withoutRoot = bodyInner
+    .replace(/<div\s+id=["']root["']\s*\/?><\/div>/gi, "")
+    .replace(/<div\s+id=["']root["']\s*\/>/gi, "")
+    .trim();
+  return withoutRoot.length < 20;
 }
 
 // ---------------------------------------------------------------------------
-// Detect project "mode": react | html
+// Detect preview mode: react | html | none
 // ---------------------------------------------------------------------------
 type PreviewMode = "react" | "html" | "none";
 
 function detectMode(project: Project): PreviewMode {
+  const htmlFile = findFile(project.files, "index.html");
+  const hasHtml = !!htmlFile;
   const hasJsx = project.files.some((f) => /\.(jsx|tsx)$/i.test(f.name));
-  const hasHtml = project.files.some((f) => f.name.toLowerCase() === "index.html");
 
-  // Explicit type always wins
-  if (project.type === "react") return "react";
+  // Explicit project type from user
   if (project.type === "html") return hasHtml ? "html" : "none";
 
-  // Vite-like project: index.html + JSX → use React renderer (HTML is just scaffold)
-  if (hasJsx) return "react";
+  // React project or auto-detect with JSX files present
+  if (project.type === "react" || hasJsx) {
+    if (hasHtml) {
+      // If index.html has REAL content (not just a Vite scaffold), show the HTML
+      if (!isViteScaffold(htmlFile!.content)) return "html";
+    }
+    // No HTML, or HTML is scaffold → React render
+    return hasJsx ? "react" : "none";
+  }
+
   if (hasHtml) return "html";
   return "none";
 }
 
 // ---------------------------------------------------------------------------
-// Build srcDoc for HTML projects
+// Inline external file refs into HTML
+// Replaces <link href="./foo.css"> and <script src="./bar.js"> with inline content.
+// Keeps CDN / external URLs untouched.
+// ---------------------------------------------------------------------------
+function inlineExternalRefs(html: string, files: ProjectFile[]): string {
+  // ── <link> tags ───────────────────────────────────────────────────────────
+  html = html.replace(/<link\b([^>]*)\/?>/gi, (tag, attrs: string) => {
+    const relMatch = attrs.match(/rel=["']stylesheet["']/i);
+    const hrefMatch = attrs.match(/href=["']([^"']+)["']/i);
+    if (!relMatch || !hrefMatch) return tag; // keep preconnect, icon, etc.
+
+    const href = hrefMatch[1];
+    // Keep external CDN links (Google Fonts, etc.) — do NOT remove them
+    if (/^https?:\/\/|^\/\//.test(href)) return tag;
+
+    const f = resolveRef(href, files);
+    if (!f) return tag; // file not found → keep original tag (don't blank it)
+    return `<style>/* ${f.name} */\n${f.content}\n</style>`;
+  });
+
+  // ── <script src="..."> tags ───────────────────────────────────────────────
+  html = html.replace(/<script\b([^>]*)><\/script>/gi, (tag, attrs: string) => {
+    const srcMatch = attrs.match(/src=["']([^"']+)["']/i);
+    if (!srcMatch) return tag; // inline script — keep
+
+    const src = srcMatch[1];
+    // Keep external CDN scripts
+    if (/^https?:\/\/|^\/\//.test(src)) return tag;
+
+    // Skip JSX/TSX in HTML mode — they need transpilation; silently remove the tag
+    if (/\.(jsx|tsx|ts)$/i.test(src)) return "";
+
+    const f = resolveRef(src, files);
+    if (!f) return tag;
+    return `<script>/* ${f.name} */\n${f.content}\n</script>`;
+  });
+
+  return html;
+}
+
+// ---------------------------------------------------------------------------
+// Build srcDoc — HTML mode
 // ---------------------------------------------------------------------------
 function buildHtmlSrcDoc(project: Project): string {
   const html = findFile(project.files, "index.html");
@@ -87,60 +121,64 @@ function buildHtmlSrcDoc(project: Project): string {
 
   let content = inlineExternalRefs(html.content, project.files);
 
-  // Ensure viewport meta (mobile)
-  if (!content.includes("viewport")) {
-    content = content.replace(/<head\b[^>]*>/i, (m) => `${m}<meta name="viewport" content="width=device-width,initial-scale=1"/>`);
-  }
-
-  // Inject any CSS not already inlined (safety net for missed links)
-  const inlinedCss = project.files
-    .filter((f) => f.name.toLowerCase().endsWith(".css") && content.includes(f.content.slice(0, 30)))
-    .map((f) => f.name);
-
+  // Safety net: inject any CSS not yet inlined
+  const alreadyInlined = new Set(
+    project.files
+      .filter((f) => f.name.toLowerCase().endsWith(".css") && content.includes(f.content.slice(0, 40)))
+      .map((f) => f.name),
+  );
   const extraCss = project.files
-    .filter((f) => f.name.toLowerCase().endsWith(".css") && !inlinedCss.includes(f.name))
-    .map((f) => f.content)
+    .filter((f) => f.name.toLowerCase().endsWith(".css") && !alreadyInlined.has(f.name))
+    .map((f) => `/* ${f.name} */\n${f.content}`)
     .join("\n");
-
   if (extraCss) {
-    if (content.includes("</head>")) {
+    if (/<\/head>/i.test(content)) {
       content = content.replace(/<\/head>/i, `<style>${extraCss}</style></head>`);
     } else {
       content = `<style>${extraCss}</style>\n` + content;
     }
   }
 
+  // Safety net: inject plain JS files not yet inlined
+  const extraJs = project.files
+    .filter((f) => /\.m?js$/i.test(f.name) && !content.includes(f.content.slice(0, 40)))
+    .map((f) => `/* ${f.name} */\n${f.content}`)
+    .join("\n");
+  if (extraJs) {
+    if (/<\/body>/i.test(content)) {
+      content = content.replace(/<\/body>/i, `<script>${extraJs}</script></body>`);
+    } else {
+      content += `<script>${extraJs}</script>`;
+    }
+  }
+
+  // Ensure viewport meta
+  if (!content.includes("viewport")) {
+    content = content.replace(
+      /<head\b[^>]*>/i,
+      (m) => `${m}<meta name="viewport" content="width=device-width,initial-scale=1"/>`,
+    );
+  }
+
   return content;
 }
 
 // ---------------------------------------------------------------------------
-// Build srcDoc for React/JSX projects (Babel standalone in-browser bundler)
+// Build srcDoc — React/JSX mode (Babel standalone in-browser bundler)
 // ---------------------------------------------------------------------------
 function buildReactSrcDoc(project: Project): string {
-  // Collect CSS
   const css = project.files
     .filter((f) => f.name.toLowerCase().endsWith(".css"))
     .map((f) => `/* ${f.name} */\n${f.content}`)
     .join("\n");
 
-  // Collect all JS/JSX/TS/TSX sources
   const sourceFiles = project.files.filter((f) => /\.(m?jsx?|tsx?)$/i.test(f.name));
 
-  // Build a file registry keyed by name AND path (no duplicates)
   const filesMap: Record<string, string> = {};
   for (const f of sourceFiles) {
     filesMap[f.name] = f.content;
-    if (f.path && f.path !== f.name) {
-      filesMap[f.path] = f.content;
-    }
+    if (f.path && f.path !== f.name) filesMap[f.path] = f.content;
   }
-
-  // Determine entry point name (for error messages)
-  const entryName =
-    sourceFiles.find((f) => /^(App|app)\.(jsx|tsx)$/i.test(f.name))?.name ??
-    sourceFiles.find((f) => /^index\.(jsx|tsx)$/i.test(f.name))?.name ??
-    sourceFiles[0]?.name ??
-    "App.jsx";
 
   return `<!doctype html>
 <html>
@@ -157,83 +195,61 @@ function buildReactSrcDoc(project: Project): string {
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
 <script>
-// ── File registry ──────────────────────────────────────────────────────────
 var __files = ${JSON.stringify(filesMap)};
-var __modules = {};   // compiled module cache
-var __compiling = {}; // circular-guard set
+var __modules = {};
+var __compiling = {};
 
-// ── Resolver: map a require() string → registry key ───────────────────────
 function __resolve(mod) {
   if (__files[mod]) return mod;
-  var bare = mod.replace(/^[.]{1,2}\\//, '').replace(/^[.]{1,2}\\\\/, '');
+  var bare = mod.replace(/^[.]{1,2}[\\/]/, '');
   var exts = ['', '.jsx', '.tsx', '.js', '.ts'];
   for (var i = 0; i < exts.length; i++) {
-    var candidate = bare + exts[i];
+    var c = bare + exts[i];
     var found = Object.keys(__files).find(function(k) {
-      return k.toLowerCase() === candidate.toLowerCase() ||
-             k.toLowerCase().endsWith('/' + candidate.toLowerCase());
+      return k.toLowerCase() === c.toLowerCase() ||
+             k.toLowerCase().endsWith('/' + c.toLowerCase());
     });
     if (found) return found;
   }
-  // index file inside directory
+  // directory index
   for (var j = 0; j < exts.length; j++) {
     var idx = bare + '/index' + exts[j];
     var fi = Object.keys(__files).find(function(k) {
-      return k.toLowerCase() === idx.toLowerCase() ||
-             k.toLowerCase().endsWith('/' + idx.toLowerCase());
+      return k.toLowerCase() === idx.toLowerCase();
     });
     if (fi) return fi;
   }
   return null;
 }
 
-// ── require() shim ────────────────────────────────────────────────────────
 function __require(mod) {
-  // Built-in shims
   if (mod === 'react' || mod === 'React') return React;
   if (mod === 'react-dom' || mod === 'react-dom/client') return {
     createRoot: function(el) { return ReactDOM.createRoot(el); },
-    render: function(el, container) { ReactDOM.createRoot(container).render(el); }
+    render: function(el, c) { ReactDOM.createRoot(c).render(el); }
   };
-
   var key = __resolve(mod);
   if (!key) { console.warn('[Preview] Module not found:', mod); return {}; }
   if (__modules[key]) return __modules[key].exports;
-
-  // Circular guard: return partial exports (allows the module that IS compiling
-  // to at least get an empty object — avoids infinite recursion)
   if (__compiling[key]) return __modules[key] ? __modules[key].exports : {};
-
   __compiling[key] = true;
   var module = { exports: {} };
   __modules[key] = module;
-
   try {
-    // Babel: react + env presets so that:
-    //   - JSX → React.createElement()
-    //   - ESM import/export → CommonJS require()/module.exports
     var compiled = Babel.transform(__files[key], {
-      presets: [
-        ['env', { modules: 'commonjs', targets: { esmodules: true } }],
-        'react'
-      ],
+      presets: [['env', { modules: 'commonjs', targets: { esmodules: true } }], 'react'],
       filename: key
     }).code;
-
-    /* jshint ignore:start */
     var fn = new Function('require', 'module', 'exports', 'React', compiled);
     fn(__require, module, module.exports, React);
-    /* jshint ignore:end */
   } catch(e) {
     console.error('[Preview] Compile error in ' + key + ':', e.message);
     module.exports.__error = e.message;
   }
-
   delete __compiling[key];
   return module.exports;
 }
 
-// ── Boot ──────────────────────────────────────────────────────────────────
 function __showError(msg) {
   document.getElementById('root').innerHTML =
     '<div style="color:#f87171;padding:20px;font-family:monospace;font-size:13px;white-space:pre-wrap;background:#1a0000;min-height:100vh">' +
@@ -241,21 +257,15 @@ function __showError(msg) {
 }
 
 window.addEventListener('load', function() {
-  // Check CDN scripts loaded
   if (typeof React === 'undefined' || typeof Babel === 'undefined') {
     __showError('Chargement React/Babel échoué.\\nVérifiez votre connexion internet puis rafraîchissez.');
     return;
   }
-
   try {
-    // Compile all source files
     Object.keys(__files).forEach(function(k) { __require(k); });
 
-    // Find the App component:
-    // Priority: App.jsx > App.tsx > index.jsx > index.tsx > first default export
     var priority = ['App.jsx','App.tsx','app.jsx','app.tsx','index.jsx','index.tsx'];
     var AppComponent = null;
-
     for (var i = 0; i < priority.length; i++) {
       var m = __modules[priority[i]];
       if (m && m.exports) {
@@ -263,8 +273,6 @@ window.addEventListener('load', function() {
         if (typeof exp === 'function') { AppComponent = exp; break; }
       }
     }
-
-    // Fallback: first module with a function default export
     if (!AppComponent) {
       var keys = Object.keys(__modules);
       for (var j = 0; j < keys.length; j++) {
@@ -275,9 +283,7 @@ window.addEventListener('load', function() {
         }
       }
     }
-
     if (!AppComponent) throw new Error('Aucun composant React trouvé.\\nAssurez-vous que App.jsx exporte un composant par défaut.');
-
     var root = ReactDOM.createRoot(document.getElementById('root'));
     root.render(React.createElement(AppComponent));
   } catch(e) {
@@ -290,7 +296,7 @@ window.addEventListener('load', function() {
 }
 
 // ---------------------------------------------------------------------------
-// Fallback: no preview possible
+// Fallback placeholder
 // ---------------------------------------------------------------------------
 function noPreviewDoc(reason: string): string {
   return `<!doctype html><html><body style="background:#0b1220;color:#64748b;font-family:system-ui;display:grid;place-items:center;min-height:100vh;margin:0;text-align:center;padding:24px"><p>${reason}</p></body></html>`;
@@ -321,7 +327,6 @@ export function Preview({ project }: { project: Project }) {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Header */}
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-4">
         <span className="text-xs font-semibold tracking-[0.25em] text-muted-foreground">PREVIEW</span>
         <button
@@ -333,7 +338,6 @@ export function Preview({ project }: { project: Project }) {
         </button>
       </div>
 
-      {/* Iframe */}
       <div className="relative flex-1 overflow-hidden">
         {loading && (
           <div className="absolute inset-0 z-10 flex items-center justify-center bg-background">
@@ -344,8 +348,6 @@ export function Preview({ project }: { project: Project }) {
           key={refreshKey}
           title="Preview"
           srcDoc={srcDoc}
-          // allow-same-origin: required for scripts to execute in Android WebView
-          // (without it, null-origin sandboxing blocks JS execution entirely)
           sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
           className="h-full w-full border-0"
           style={{ background: "#0b1220" }}
