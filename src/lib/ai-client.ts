@@ -1,70 +1,76 @@
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
-export type AIConfig = {
-  model?: string;
-  baseURL?: string;
-};
+export type ParsedFile = { path: string; content: string };
 
-export const DEFAULT_BASE_URL = "/api/public/ai-chat";
-export const NATIVE_AI_URL =
-  "https://project--edfa4d80-9acf-4e83-a485-d88a5af56549-dev.lovable.app/api/public/ai-chat";
-export const DEFAULT_MODEL = "google/gemini-3-flash-preview";
-
-type CapacitorAPI = {
-  isNativePlatform?: () => boolean;
-};
-
-function isNativeApp() {
-  const w = globalThis as unknown as { Capacitor?: CapacitorAPI };
-  return w.Capacitor?.isNativePlatform?.() ?? false;
-}
-
-function resolveAIEndpoint(cfg: AIConfig) {
-  const configured = cfg.baseURL?.trim();
-  if (configured && !configured.includes("ai.gateway.lovable.dev")) return configured;
-  return isNativeApp() ? NATIVE_AI_URL : DEFAULT_BASE_URL;
-}
-
-export async function chatComplete(
-  cfg: AIConfig,
+// ---------------------------------------------------------------------------
+// Direct OpenAI API call with streaming
+// ---------------------------------------------------------------------------
+export async function chatCompleteStream(
+  apiKey: string,
+  model: string,
   messages: ChatMessage[],
+  onChunk: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<string> {
-  const url = resolveAIEndpoint(cfg);
-  const res = await fetch(url, {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     signal,
     headers: {
       "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
+      model,
       messages,
+      stream: true,
+      max_tokens: 4096,
     }),
   });
+
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     let message = text || res.statusText;
-    try {
-      message = JSON.parse(text)?.error || message;
-    } catch {
-      // Keep the raw response text.
-    }
-    throw new Error(`AI ${res.status}: ${message}`);
+    try { message = JSON.parse(text)?.error?.message || message; } catch { /* noop */ }
+    throw new Error(`OpenAI ${res.status}: ${message}`);
   }
-  const j = await res.json();
-  return j?.text ?? "";
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let full = "";
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const trimmed = line.replace(/^data:\s*/, "").trim();
+      if (!trimmed || trimmed === "[DONE]") continue;
+      try {
+        const json = JSON.parse(trimmed);
+        const delta = json.choices?.[0]?.delta?.content ?? "";
+        if (delta) {
+          full += delta;
+          onChunk(delta);
+        }
+      } catch { /* skip malformed chunk */ }
+    }
+  }
+  return full;
 }
 
-export type ParsedFile = { path: string; content: string };
-
-// Extract fenced code blocks with optional filename hints:
-// ```lang path/to/file.ext
+// ---------------------------------------------------------------------------
+// Parse fenced code blocks with filename hints from AI responses
+// \`\`\`lang path/to/file.ext
 // ...code...
-// ```
-// or a line above the block like "**file.ts**" / "// file.ts"
+// \`\`\`
+// ---------------------------------------------------------------------------
 export function extractFiles(markdown: string): ParsedFile[] {
   const out: ParsedFile[] = [];
-  const re = /(?:^|\n)(?:[^\n]*?[`*]{0,3}\s*([\w./\-]+\.[a-zA-Z0-9]+)[`*]{0,3}[^\n]*\n)?```([\w+-]*)?(?:\s+([\w./\-]+\.[a-zA-Z0-9]+))?\n([\s\S]*?)```/g;
+  const re =
+    /(?:^|\n)(?:[^\n]*?[`*]{0,3}\s*([\w./\-]+\.[a-zA-Z0-9]+)[`*]{0,3}[^\n]*\n)?```([\w+-]*)(?:\s+([\w./\-]+\.[a-zA-Z0-9]+))?\n([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
   let idx = 0;
   while ((m = re.exec(markdown)) !== null) {
