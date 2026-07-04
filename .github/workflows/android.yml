@@ -37,8 +37,12 @@ jobs:
       - name: Build static SPA for mobile
         run: bun run build:mobile
 
-      - name: Verify dist output
-        run: ls -la dist | head -30
+      - name: Rename index.mobile.html → index.html for Capacitor
+        run: |
+          if [ -f dist/index.mobile.html ]; then
+            mv dist/index.mobile.html dist/index.html
+          fi
+          ls -la dist/
 
       - name: Add Android platform
         run: |
