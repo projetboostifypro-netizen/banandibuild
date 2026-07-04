@@ -27,6 +27,7 @@ import {
   type ChatMessage,
   type AIProvider,
   type ParsedFile,
+  type ProviderConfig,
 } from "@/lib/ai-client";
 import { toast } from "sonner";
 
@@ -238,25 +239,28 @@ function smartMatch(
 ): ProjectFile | null {
   const targetPath = parsed.path.toLowerCase();
 
-  // 1. Exact case-insensitive match
+  // 1. Exact case-insensitive match (always attempted, named or snippet)
   const exact = projectFiles.find(
     (f) => f.path.toLowerCase() === targetPath || f.name.toLowerCase() === targetPath,
   );
   if (exact) return exact;
 
-  // 2. If it's a snippet or the filename didn't match, try extension-based fallback
+  // 2. Extension-based fallback — ONLY for true snippets (no filename from AI).
+  //    Skip for named files that simply don't exist yet (user may intend a new file).
+  if (!parsed.isSnippet) return null;
+
   const ext = parsed.path.split(".").pop()?.toLowerCase() ?? "";
   const byExt = projectFiles.filter(
     (f) => f.name.split(".").pop()?.toLowerCase() === ext,
   );
 
-  // 2a. If the active file has the same extension, prefer it
+  // 2a. Active file matches extension → prefer it (user is likely editing it)
   if (activeFileId) {
     const activeMatch = byExt.find((f) => f.id === activeFileId);
     if (activeMatch) return activeMatch;
   }
 
-  // 2b. If only one file with that extension exists, use it
+  // 2b. Only one file with that extension → safe to auto-apply
   if (byExt.length === 1) return byExt[0];
 
   return null;
@@ -268,18 +272,21 @@ function smartMatch(
 function FilePicker({
   options,
   onPick,
-  onCancel,
+  onClose,
+  onCreateNew,
 }: {
   options: ProjectFile[];
   onPick: (file: ProjectFile) => void;
-  onCancel: () => void;
+  onClose: () => void;      // dismiss only — no side effect
+  onCreateNew: () => void;  // create a brand-new file
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="w-full max-w-xs rounded-xl border border-border bg-sidebar shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <span className="text-sm font-semibold text-foreground">Quel fichier modifier ?</span>
-          <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+          {/* X = close modal only, does NOT create a file */}
+          <button onClick={onClose} className="text-muted-foreground hover:text-foreground">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -295,20 +302,27 @@ function FilePicker({
               <span className="ml-auto text-[10px] text-muted-foreground">{f.path}</span>
             </button>
           ))}
-          <button
-            onClick={onCancel}
-            className="mt-1 w-full rounded-lg py-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            Annuler (créer un nouveau fichier)
-          </button>
+          <div className="mt-1 flex gap-1">
+            <button
+              onClick={onClose}
+              className="flex-1 rounded-lg py-2 text-xs text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              Fermer
+            </button>
+            <button
+              onClick={onCreateNew}
+              className="flex-1 rounded-lg py-2 text-xs text-primary hover:bg-primary/10"
+            >
+              Créer nouveau fichier
+            </button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-// We need to import ProviderConfig type for use in JSX below
-import type { ProviderConfig } from "@/lib/ai-client";
+// ProviderConfig is imported above with the other @/lib/ai-client types
 
 // ---------------------------------------------------------------------------
 // Main Panel
@@ -462,9 +476,13 @@ RAPPEL CRITIQUE: Si tu modifies un fichier existant, ton bloc de code DOIT avoir
     setPickerState(null);
   }
 
-  function cancelPick() {
+  function closePicker() {
+    // Just dismiss the modal — no file action
+    setPickerState(null);
+  }
+
+  function createNewFromPicker() {
     if (!pickerState) return;
-    // Create as new file instead
     const { content, originalPath } = pickerState;
     addFile(project.id, originalPath);
     setTimeout(() => {
@@ -515,7 +533,8 @@ RAPPEL CRITIQUE: Si tu modifies un fichier existant, ton bloc de code DOIT avoir
         <FilePicker
           options={pickerState.options}
           onPick={confirmPick}
-          onCancel={cancelPick}
+          onClose={closePicker}
+          onCreateNew={createNewFromPicker}
         />
       )}
 

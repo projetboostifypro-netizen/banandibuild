@@ -273,8 +273,8 @@ export function extractFiles(markdown: string): ParsedFile[] {
 
   while ((m = blockRe.exec(markdown)) !== null) {
     const lang = m[1] || "";
-    const inlineFilename = m[3]; // name written on the fence line
-    const codeContent = m[2] ?? "";
+    const inlineFilename = m[2] ?? null; // optional filename on the fence line: ```jsx App.jsx
+    const codeContent = m[3] ?? "";     // everything between the fences
 
     // --- Priority order for filename ---
     // 1. Filename on the fence line: ```jsx App.jsx
