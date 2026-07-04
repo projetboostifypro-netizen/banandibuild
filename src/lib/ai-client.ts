@@ -1,7 +1,6 @@
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export type AIConfig = {
-  apiKey?: string;
   model?: string;
   baseURL?: string;
 };

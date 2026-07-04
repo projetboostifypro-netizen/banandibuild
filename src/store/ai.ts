@@ -3,11 +3,10 @@ import { persist } from "zustand/middleware";
 import { DEFAULT_BASE_URL, DEFAULT_MODEL, type ChatMessage } from "@/lib/ai-client";
 
 type AIStore = {
-  apiKey: string;
   model: string;
   baseURL: string;
   history: Record<string, ChatMessage[]>; // per project
-  setConfig: (cfg: Partial<Pick<AIStore, "apiKey" | "model" | "baseURL">>) => void;
+  setConfig: (cfg: Partial<Pick<AIStore, "model" | "baseURL">>) => void;
   appendMessage: (projectId: string, msg: ChatMessage) => void;
   clearHistory: (projectId: string) => void;
 };
@@ -15,7 +14,6 @@ type AIStore = {
 export const useAIStore = create<AIStore>()(
   persist(
     (set) => ({
-      apiKey: "",
       model: DEFAULT_MODEL,
       baseURL: DEFAULT_BASE_URL,
       history: {},
