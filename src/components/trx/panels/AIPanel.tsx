@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import { Send, Sparkles, Trash2, FilePlus, Settings2, Loader2 } from "lucide-react";
+import { Send, Sparkles, Trash2, FilePlus, Loader2 } from "lucide-react";
 import type { Project } from "@/store/projects";
 import { useProjectStore } from "@/store/projects";
 import { useAIStore } from "@/store/ai";
@@ -15,13 +15,11 @@ const SYSTEM_PROMPT = `You are Trx Copilot, an AI pair programmer inside a mobil
 - Prefer complete file contents so the IDE can save them directly.`;
 
 export function AIPanel({ project }: { project: Project }) {
-  const { apiKey, model, baseURL, history, appendMessage, clearHistory, setConfig } =
-    useAIStore();
+  const { model, baseURL, history, appendMessage, clearHistory } = useAIStore();
   const addFile = useProjectStore((s) => s.addFile);
   const updateFile = useProjectStore((s) => s.updateFile);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [showSettings, setShowSettings] = useState(!apiKey);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const messages = history[project.id] ?? [];
@@ -34,11 +32,6 @@ export function AIPanel({ project }: { project: Project }) {
   async function send() {
     const text = input.trim();
     if (!text) return;
-    if (!apiKey) {
-      toast.error("Add your Lovable API key in settings first.");
-      setShowSettings(true);
-      return;
-    }
     const userMsg: ChatMessage = { role: "user", content: text };
     appendMessage(project.id, userMsg);
     setInput("");
@@ -53,7 +46,7 @@ export function AIPanel({ project }: { project: Project }) {
         ...messages,
         userMsg,
       ];
-      const reply = await chatComplete({ apiKey, model, baseURL }, context);
+      const reply = await chatComplete({ model, baseURL }, context);
       appendMessage(project.id, { role: "assistant", content: reply });
       setTimeout(() => scrollRef.current?.scrollTo({ top: 1e9 }), 50);
     } catch (e) {
@@ -89,13 +82,6 @@ export function AIPanel({ project }: { project: Project }) {
         </span>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => setShowSettings((v) => !v)}
-            className="rounded p-1 hover:bg-secondary"
-            aria-label="AI Settings"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-          </button>
-          <button
             onClick={() => clearHistory(project.id)}
             className="rounded p-1 hover:bg-secondary"
             aria-label="Clear chat"
@@ -104,28 +90,6 @@ export function AIPanel({ project }: { project: Project }) {
           </button>
         </div>
       </div>
-
-      {showSettings && (
-        <div className="border-b border-border bg-secondary/30 p-3 text-xs">
-          <label className="mb-1 block text-muted-foreground">Lovable API Key</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setConfig({ apiKey: e.target.value })}
-            placeholder="sk-..."
-            className="mb-2 w-full rounded border border-border bg-background px-2 py-1"
-          />
-          <label className="mb-1 block text-muted-foreground">Model</label>
-          <input
-            value={model}
-            onChange={(e) => setConfig({ model: e.target.value })}
-            className="mb-2 w-full rounded border border-border bg-background px-2 py-1"
-          />
-          <p className="text-[10px] text-muted-foreground">
-            Get a key from lovable.dev → Settings → AI Gateway. Key is stored locally on your device.
-          </p>
-        </div>
-      )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 text-sm">
         {messages.length === 0 ? (
