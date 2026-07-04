@@ -27,21 +27,33 @@ function resolveRef(ref: string, files: ProjectFile[]): ProjectFile | undefined 
 /**
  * Detect if index.html is a Vite-style scaffold (body = only <div id="root"> + scripts)
  * vs a real HTML page with actual content.
+ *
+ * Strategy: strip from the body anything a scaffold legitimately has
+ * (scripts, noscript, comments, the root div, whitespace). If nothing
+ * meaningful remains, it's a scaffold.
  */
 function isViteScaffold(htmlContent: string): boolean {
   const bodyMatch = htmlContent.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
   if (!bodyMatch) return false;
-  const bodyInner = bodyMatch[1]
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "") // strip script tags
-    .replace(/<script\b[^>]*><\/script>/gi, "")          // strip self-closing scripts
-    .replace(/\s+/g, " ")
-    .trim();
-  // After stripping scripts, a scaffold only has <div id="root"></div> or is empty
-  const withoutRoot = bodyInner
-    .replace(/<div\s+id=["']root["']\s*\/?><\/div>/gi, "")
-    .replace(/<div\s+id=["']root["']\s*\/>/gi, "")
-    .trim();
-  return withoutRoot.length < 20;
+
+  let inner = bodyMatch[1];
+
+  // Remove HTML comments
+  inner = inner.replace(/<!--[\s\S]*?-->/g, "");
+  // Remove <script>...</script> blocks (open/close and self-closing)
+  inner = inner.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "");
+  inner = inner.replace(/<script\b[^>]*\/>/gi, "");
+  // Remove <noscript>...</noscript>
+  inner = inner.replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, "");
+  // Remove the root div (id="root" or id='root')
+  inner = inner.replace(/<div\b[^>]*\bid=["']root["'][^>]*>\s*<\/div>/gi, "");
+  inner = inner.replace(/<div\b[^>]*\bid=["']root["'][^>]*\/>/gi, "");
+  // Collapse whitespace
+  inner = inner.replace(/\s+/g, "").trim();
+
+  // A scaffold has nothing left after stripping the above.
+  // Real pages still have structural elements: <header>, <main>, <section>, <p>, etc.
+  return inner.length === 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,43 +85,50 @@ function detectMode(project: Project): PreviewMode {
 
 // ---------------------------------------------------------------------------
 // Inline external file refs into HTML
-// Replaces <link href="./foo.css"> and <script src="./bar.js"> with inline content.
-// Keeps CDN / external URLs untouched.
+// Returns { html, inlinedCssNames, inlinedJsNames } so the caller can
+// deduplicate by file identity (not content-fragment heuristics).
+// Keeps CDN / external URLs completely untouched.
 // ---------------------------------------------------------------------------
-function inlineExternalRefs(html: string, files: ProjectFile[]): string {
-  // ── <link> tags ───────────────────────────────────────────────────────────
+function inlineExternalRefs(
+  html: string,
+  files: ProjectFile[],
+): { html: string; inlinedCssNames: Set<string>; inlinedJsNames: Set<string> } {
+  const inlinedCssNames = new Set<string>();
+  const inlinedJsNames = new Set<string>();
+
+  // ── <link> stylesheet tags ────────────────────────────────────────────────
   html = html.replace(/<link\b([^>]*)\/?>/gi, (tag, attrs: string) => {
     const relMatch = attrs.match(/rel=["']stylesheet["']/i);
     const hrefMatch = attrs.match(/href=["']([^"']+)["']/i);
     if (!relMatch || !hrefMatch) return tag; // keep preconnect, icon, etc.
 
     const href = hrefMatch[1];
-    // Keep external CDN links (Google Fonts, etc.) — do NOT remove them
-    if (/^https?:\/\/|^\/\//.test(href)) return tag;
+    if (/^https?:\/\/|^\/\//.test(href)) return tag; // keep CDN links (Google Fonts…)
 
     const f = resolveRef(href, files);
-    if (!f) return tag; // file not found → keep original tag (don't blank it)
+    if (!f) return tag; // local file not found → keep original
+    inlinedCssNames.add(f.name);
     return `<style>/* ${f.name} */\n${f.content}\n</style>`;
   });
 
-  // ── <script src="..."> tags ───────────────────────────────────────────────
+  // ── <script src="..."></script> tags ─────────────────────────────────────
   html = html.replace(/<script\b([^>]*)><\/script>/gi, (tag, attrs: string) => {
     const srcMatch = attrs.match(/src=["']([^"']+)["']/i);
-    if (!srcMatch) return tag; // inline script — keep
+    if (!srcMatch) return tag; // inline script — keep as-is
 
     const src = srcMatch[1];
-    // Keep external CDN scripts
-    if (/^https?:\/\/|^\/\//.test(src)) return tag;
+    if (/^https?:\/\/|^\/\//.test(src)) return tag; // keep CDN scripts
 
-    // Skip JSX/TSX in HTML mode — they need transpilation; silently remove the tag
+    // JSX/TSX/TS require transpilation — cannot inline in HTML mode; drop silently
     if (/\.(jsx|tsx|ts)$/i.test(src)) return "";
 
     const f = resolveRef(src, files);
     if (!f) return tag;
+    inlinedJsNames.add(f.name);
     return `<script>/* ${f.name} */\n${f.content}\n</script>`;
   });
 
-  return html;
+  return { html, inlinedCssNames, inlinedJsNames };
 }
 
 // ---------------------------------------------------------------------------
@@ -119,16 +138,15 @@ function buildHtmlSrcDoc(project: Project): string {
   const html = findFile(project.files, "index.html");
   if (!html) return noPreviewDoc("Pas de fichier index.html dans ce projet.");
 
-  let content = inlineExternalRefs(html.content, project.files);
-
-  // Safety net: inject any CSS not yet inlined
-  const alreadyInlined = new Set(
-    project.files
-      .filter((f) => f.name.toLowerCase().endsWith(".css") && content.includes(f.content.slice(0, 40)))
-      .map((f) => f.name),
+  const { html: content0, inlinedCssNames, inlinedJsNames } = inlineExternalRefs(
+    html.content,
+    project.files,
   );
+  let content = content0;
+
+  // Safety net: inject CSS files NOT already inlined (tracked by file identity)
   const extraCss = project.files
-    .filter((f) => f.name.toLowerCase().endsWith(".css") && !alreadyInlined.has(f.name))
+    .filter((f) => f.name.toLowerCase().endsWith(".css") && !inlinedCssNames.has(f.name))
     .map((f) => `/* ${f.name} */\n${f.content}`)
     .join("\n");
   if (extraCss) {
@@ -139,9 +157,9 @@ function buildHtmlSrcDoc(project: Project): string {
     }
   }
 
-  // Safety net: inject plain JS files not yet inlined
+  // Safety net: inject plain JS files NOT already inlined
   const extraJs = project.files
-    .filter((f) => /\.m?js$/i.test(f.name) && !content.includes(f.content.slice(0, 40)))
+    .filter((f) => /\.m?js$/i.test(f.name) && !inlinedJsNames.has(f.name))
     .map((f) => `/* ${f.name} */\n${f.content}`)
     .join("\n");
   if (extraJs) {
@@ -152,7 +170,7 @@ function buildHtmlSrcDoc(project: Project): string {
     }
   }
 
-  // Ensure viewport meta
+  // Ensure viewport meta (important for mobile)
   if (!content.includes("viewport")) {
     content = content.replace(
       /<head\b[^>]*>/i,
