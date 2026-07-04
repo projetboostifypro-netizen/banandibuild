@@ -37,10 +37,6 @@ jobs:
 
       - name: Build app (SPA)
         run: bun run build:mobile
-        env:
-          # Embed API key at build time so the native app can call OpenAI directly.
-          # Add OPENAI_API_KEY to your GitHub repository secrets to enable this.
-          VITE_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
       - name: Rename index.mobile.html → index.html for Capacitor
         run: |
