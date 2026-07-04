@@ -1,0 +1,2 @@
+- [Capacitor WebView fixes](capacitor-webview.md) — root cause of all broken buttons + how the mobile SPA entry is structured
+- [CI package install](ci-npm-vs-bun.md) — bun install fails in GitHub Actions for new packages; use npm install --legacy-peer-deps instead
