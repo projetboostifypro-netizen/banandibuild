@@ -1,29 +1,52 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { type ChatMessage } from "@/lib/ai-client";
+import { type ChatMessage, type AIProvider, PROVIDER_CONFIGS } from "@/lib/ai-client";
 
-export const DEFAULT_MODEL = "gpt-4o-mini";
+export type { AIProvider };
 
 type AIStore = {
+  provider: AIProvider;
   model: string;
-  /** User-entered OpenAI API key — stored only on this device, never sent elsewhere */
-  apiKey: string;
+  /** API keys per provider — stored only on this device, never sent elsewhere */
+  apiKeys: Partial<Record<AIProvider, string>>;
   history: Record<string, ChatMessage[]>;
+  setProvider: (provider: AIProvider) => void;
   setModel: (model: string) => void;
-  setApiKey: (key: string) => void;
+  setApiKey: (provider: AIProvider, key: string) => void;
+  removeApiKey: (provider: AIProvider) => void;
   appendMessage: (projectId: string, msg: ChatMessage) => void;
   clearHistory: (projectId: string) => void;
-  getResolvedApiKey: () => string;
+  getActiveApiKey: () => string;
+  getActiveModel: () => string;
 };
 
 export const useAIStore = create<AIStore>()(
   persist(
     (set, get) => ({
-      model: DEFAULT_MODEL,
-      apiKey: "",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      apiKeys: {},
       history: {},
+
+      setProvider: (provider) => {
+        const config = PROVIDER_CONFIGS[provider];
+        set({ provider, model: config.defaultModel });
+      },
+
       setModel: (model) => set({ model }),
-      setApiKey: (apiKey) => set({ apiKey }),
+
+      setApiKey: (provider, key) =>
+        set((s) => ({
+          apiKeys: { ...s.apiKeys, [provider]: key.trim() },
+        })),
+
+      removeApiKey: (provider) =>
+        set((s) => {
+          const next = { ...s.apiKeys };
+          delete next[provider];
+          return { apiKeys: next };
+        }),
+
       appendMessage: (projectId, msg) =>
         set((s) => ({
           history: {
@@ -31,12 +54,20 @@ export const useAIStore = create<AIStore>()(
             [projectId]: [...(s.history[projectId] ?? []), msg],
           },
         })),
+
       clearHistory: (projectId) =>
         set((s) => ({ history: { ...s.history, [projectId]: [] } })),
-      // Returns the user-entered key (no build-time secret fallback — API keys
-      // must never be bundled into client assets where they can be extracted).
-      getResolvedApiKey: () => get().apiKey.trim(),
+
+      getActiveApiKey: () => {
+        const { provider, apiKeys } = get();
+        return (apiKeys[provider] ?? "").trim();
+      },
+
+      getActiveModel: () => {
+        const { model } = get();
+        return model;
+      },
     }),
-    { name: "trx-ai-store-v2" },
+    { name: "trx-ai-store-v3" },
   ),
 );
