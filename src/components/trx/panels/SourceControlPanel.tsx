@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GitBranch, EyeOff, Github, RefreshCcw, Check } from "lucide-react";
+import { GitBranch, EyeOff, Github, RefreshCcw, Check, X } from "lucide-react";
 import type { Project } from "@/store/projects";
 import { useProjectStore } from "@/store/projects";
 import { toast } from "sonner";
@@ -8,6 +8,19 @@ export function SourceControlPanel({ project }: { project: Project }) {
   const [msg, setMsg] = useState("");
   const changes = project.files.filter((f) => f.modified);
   const publish = useProjectStore((s) => s.publishToGithub);
+
+  // Inline GitHub URL input — replaces window.prompt (blocked in WebView)
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [repoUrl, setRepoUrl] = useState("");
+
+  function confirmPublish() {
+    const url = repoUrl.trim();
+    if (!url) return;
+    publish(project.id, url);
+    toast.success("Marked as published to GitHub");
+    setShowUrlInput(false);
+    setRepoUrl("");
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -37,18 +50,45 @@ export function SourceControlPanel({ project }: { project: Project }) {
             This project is only saved locally. Publish to GitHub to back up your code and
             collaborate.
           </p>
-          <button
-            onClick={() => {
-              const url = prompt("GitHub repo URL (V1: stored locally)");
-              if (url) {
-                publish(project.id, url);
-                toast.success("Marked as published to GitHub");
-              }
-            }}
-            className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500/90 px-3 py-2 text-sm font-semibold text-black hover:brightness-110"
-          >
-            <Github className="h-4 w-4" /> Publish to GitHub
-          </button>
+
+          {showUrlInput ? (
+            /* Inline URL input — avoids window.prompt which is blocked in WebView */
+            <div className="mt-3 space-y-2">
+              <input
+                autoFocus
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") confirmPublish();
+                  if (e.key === "Escape") { setShowUrlInput(false); setRepoUrl(""); }
+                }}
+                placeholder="https://github.com/user/repo"
+                className="w-full rounded-lg border border-amber-500/40 bg-background px-3 py-2 text-sm outline-none focus:border-amber-500"
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={confirmPublish}
+                  disabled={!repoUrl.trim()}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-amber-500/90 px-3 py-2 text-sm font-semibold text-black hover:brightness-110 disabled:opacity-40"
+                >
+                  <Check className="h-4 w-4" /> Confirm
+                </button>
+                <button
+                  onClick={() => { setShowUrlInput(false); setRepoUrl(""); }}
+                  className="flex items-center justify-center rounded-lg border border-border bg-secondary px-3 py-2 text-sm"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowUrlInput(true)}
+              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500/90 px-3 py-2 text-sm font-semibold text-black hover:brightness-110"
+            >
+              <Github className="h-4 w-4" /> Publish to GitHub
+            </button>
+          )}
         </div>
       ) : (
         <div className="mx-4 mt-4 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-300">

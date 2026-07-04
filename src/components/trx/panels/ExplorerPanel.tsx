@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   ChevronDown,
   Plus,
@@ -7,6 +7,8 @@ import {
   Trash2,
   Pencil,
   Save,
+  Check,
+  X,
 } from "lucide-react";
 import type { Project } from "@/store/projects";
 import { useProjectStore } from "@/store/projects";
@@ -17,6 +19,44 @@ export function ExplorerPanel({ project }: { project: Project }) {
   const { openFile, addFile, deleteFile, renameFile } = useProjectStore();
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  // Inline new-file creation (replaces window.prompt which is blocked in WebView)
+  const [creatingFile, setCreatingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState("");
+  const newFileInputRef = useRef<HTMLInputElement>(null);
+
+  function startCreatingFile() {
+    setCreatingFile(true);
+    setNewFileName("");
+    setTimeout(() => newFileInputRef.current?.focus(), 50);
+  }
+
+  function confirmCreateFile() {
+    const name = newFileName.trim();
+    if (name) {
+      addFile(project.id, name);
+      toast.success(`Created ${name}`);
+    }
+    setCreatingFile(false);
+    setNewFileName("");
+  }
+
+  function handleDeleteFile(fileId: string, fileName: string) {
+    // Use toast confirmation instead of window.confirm (blocked in WebView)
+    toast(`Delete "${fileName}"?`, {
+      action: {
+        label: "Delete",
+        onClick: () => {
+          deleteFile(project.id, fileId);
+          toast.success(`"${fileName}" deleted`);
+        },
+      },
+      cancel: {
+        label: "Cancel",
+        onClick: () => {},
+      },
+      duration: 5000,
+    });
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -46,10 +86,7 @@ export function ExplorerPanel({ project }: { project: Project }) {
           <button
             className="rounded p-1 hover:bg-secondary hover:text-foreground"
             aria-label="New file"
-            onClick={() => {
-              const name = prompt("New file name (e.g. App.jsx)");
-              if (name) addFile(project.id, name);
-            }}
+            onClick={startCreatingFile}
           >
             <Plus className="h-4 w-4" />
           </button>
@@ -112,9 +149,7 @@ export function ExplorerPanel({ project }: { project: Project }) {
                 <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
               </button>
               <button
-                onClick={() => {
-                  if (confirm(`Delete ${f.name}?`)) deleteFile(project.id, f.id);
-                }}
+                onClick={() => handleDeleteFile(f.id, f.name)}
                 className="opacity-0 group-hover:opacity-100"
                 aria-label="Delete"
               >
@@ -123,6 +158,37 @@ export function ExplorerPanel({ project }: { project: Project }) {
             </li>
           ))}
         </ul>
+
+        {/* Inline new-file input — replaces window.prompt */}
+        {creatingFile && (
+          <div className="mt-1 flex items-center gap-1 rounded border border-primary/40 bg-primary/5 pl-8 pr-2 py-1">
+            <FileCode className="h-4 w-4 text-primary/60" />
+            <input
+              ref={newFileInputRef}
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") confirmCreateFile();
+                if (e.key === "Escape") {
+                  setCreatingFile(false);
+                  setNewFileName("");
+                }
+              }}
+              placeholder="filename.tsx"
+              className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+            <button onClick={confirmCreateFile} className="text-primary" aria-label="Confirm">
+              <Check className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => { setCreatingFile(false); setNewFileName(""); }}
+              className="text-muted-foreground"
+              aria-label="Cancel"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
