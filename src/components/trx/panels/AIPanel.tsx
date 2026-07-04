@@ -14,8 +14,10 @@ import {
   ChevronRight,
   Check,
   X,
+  RefreshCw,
+  FileEdit,
 } from "lucide-react";
-import type { Project } from "@/store/projects";
+import type { Project, ProjectFile } from "@/store/projects";
 import { useProjectStore } from "@/store/projects";
 import { useAIStore } from "@/store/ai";
 import {
@@ -24,32 +26,68 @@ import {
   PROVIDER_CONFIGS,
   type ChatMessage,
   type AIProvider,
+  type ParsedFile,
 } from "@/lib/ai-client";
 import { toast } from "sonner";
 
-const SYSTEM_PROMPT = `Tu es Trx Copilot, un assistant IA de programmation dans un IDE mobile.
-Tu es l'équivalent de GitHub Copilot dans VS Code, mais en version mobile.
+// ---------------------------------------------------------------------------
+// SYSTEM PROMPT — strict file naming + professional design rules
+// ---------------------------------------------------------------------------
+const SYSTEM_PROMPT = `Tu es Trx Copilot, un assistant de programmation expert intégré dans un IDE mobile.
 
-Règles:
-- Réponds en français si l'utilisateur écrit en français.
-- Quand tu crées ou modifies des fichiers, utilise TOUJOURS des blocs de code fencés avec le nom du fichier:
-  \`\`\`tsx App.tsx
-  ...code complet...
-  \`\`\`
-- Préfère des fichiers COMPLETS pour que l'IDE puisse les enregistrer directement.
-- Explique brièvement ce que tu as modifié après le code.
-- Pour les bugs: identifie la cause racine, propose la correction avec le fichier complet.`;
+═══ RÈGLES ABSOLUES — NE JAMAIS ENFREINDRE ═══
 
-// ── Markdown renderer with code block highlighting ────────────────────────────
+1. NOMMAGE DES FICHIERS (critique):
+   - Utilise TOUJOURS le format: \`\`\`jsx App.jsx   (langue + nom EXACT du fichier)
+   - Le nom du fichier doit correspondre EXACTEMENT à ce qui existe dans le projet
+   - Si tu modifies App.jsx, le bloc doit être \`\`\`jsx App.jsx — pas snippet, pas nouveau fichier
+   - JAMAIS de noms génériques type "snippet-1.html", "component.jsx", "style.css"
+   - Si le fichier à modifier est dans la liste du projet, utilise son nom exact
+
+2. MODIFICATION vs CRÉATION:
+   - Quand l'utilisateur dit "modifie", "améliore", "change", "ajoute dans" → MODIFIER le fichier existant
+   - Inclure le fichier COMPLET, pas juste les parties modifiées
+   - Ne JAMAIS créer un nouveau fichier si l'utilisateur veut modifier un existant
+
+3. DESIGNS PROFESSIONNELS (obligatoire):
+   - Chaque page HTML/CSS doit avoir un design moderne et professionnel
+   - Utilise des dégradés, glassmorphism, ombres, animations CSS
+   - Palette sombre élégante ou palette colorée audacieuse — jamais de blanc plat
+   - Police Google Fonts importée (Inter, Poppins, Space Grotesk…)
+   - Hover effects, transitions fluides, micro-interactions
+   - Responsive mobile-first
+   - Jamais de HTML/CSS basique ou non stylisé
+
+═══ FORMAT OBLIGATOIRE ═══
+
+\`\`\`html index.html
+...code complet...
+\`\`\`
+
+\`\`\`css App.css
+...code complet...
+\`\`\`
+
+\`\`\`jsx App.jsx
+...code complet...
+\`\`\`
+
+═══ AUTRES RÈGLES ═══
+- Réponds en français si l'utilisateur écrit en français
+- Explique brièvement APRÈS le code ce qui a été modifié
+- Pour les bugs: identifie la cause racine, donne le fichier complet corrigé`;
+
+// ---------------------------------------------------------------------------
+// Markdown renderer with syntax-highlighted code blocks
+// ---------------------------------------------------------------------------
 function MarkdownContent({ content }: { content: string }) {
   const parts: React.ReactNode[] = [];
-  const codeBlockRe = /```([\w+-]*)?(?:\s+([\w./\-]+\.[a-zA-Z0-9]+))?\n([\s\S]*?)```/g;
+  const codeBlockRe = /```([\w+-]*)(?:\s+([\w./\-]+\.[a-zA-Z0-9]{1,10}))?\n([\s\S]*?)```/g;
   let lastIndex = 0;
   let key = 0;
   let match: RegExpExecArray | null;
 
   while ((match = codeBlockRe.exec(content)) !== null) {
-    // Text before the code block
     const before = content.slice(lastIndex, match.index);
     if (before) {
       parts.push(
@@ -72,10 +110,10 @@ function MarkdownContent({ content }: { content: string }) {
                 {lang}
               </span>
             )}
-            {filename && <span className="font-mono text-foreground/80">{filename}</span>}
+            {filename && <span className="font-mono text-foreground/80 font-semibold">{filename}</span>}
           </div>
         )}
-        <pre className="overflow-x-auto bg-[oklch(0.12_0.01_260)] p-3 font-mono text-[11px] leading-relaxed text-[oklch(0.92_0.02_245)] scrollbar-thin">
+        <pre className="overflow-x-auto bg-[oklch(0.12_0.01_260)] p-3 font-mono text-[11px] leading-relaxed text-[oklch(0.92_0.02_245)]">
           {code}
         </pre>
       </div>,
@@ -84,7 +122,6 @@ function MarkdownContent({ content }: { content: string }) {
     lastIndex = match.index + match[0].length;
   }
 
-  // Remaining text after last code block
   const tail = content.slice(lastIndex);
   if (tail) {
     parts.push(
@@ -97,7 +134,9 @@ function MarkdownContent({ content }: { content: string }) {
   return <div className="text-xs leading-relaxed">{parts}</div>;
 }
 
-// ── Provider selector ─────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Provider icons
+// ---------------------------------------------------------------------------
 const PROVIDER_ICONS: Record<AIProvider, string> = {
   openai: "🤖",
   groq: "⚡",
@@ -105,12 +144,13 @@ const PROVIDER_ICONS: Record<AIProvider, string> = {
   claude: "🧠",
 };
 
-// ── API Key Setup Screen ──────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// API Key Setup Screen (first-run)
+// ---------------------------------------------------------------------------
 function ApiKeySetup({ onSave }: { onSave: (provider: AIProvider, key: string) => void }) {
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>("openai");
   const [key, setKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-
   const config = PROVIDER_CONFIGS[selectedProvider];
 
   function handleSave() {
@@ -136,16 +176,11 @@ function ApiKeySetup({ onSave }: { onSave: (provider: AIProvider, key: string) =
           Stockée uniquement sur cet appareil.
         </p>
       </div>
-
-      {/* Provider tiles */}
       <div className="grid w-full grid-cols-2 gap-2">
-        {(Object.values(PROVIDER_CONFIGS) as typeof PROVIDER_CONFIGS[AIProvider][]).map((p) => (
+        {(Object.values(PROVIDER_CONFIGS) as ProviderConfig[]).map((p) => (
           <button
             key={p.id}
-            onClick={() => {
-              setSelectedProvider(p.id);
-              setKey("");
-            }}
+            onClick={() => { setSelectedProvider(p.id); setKey(""); }}
             className={`flex flex-col items-center gap-1 rounded-lg border p-2.5 text-xs transition ${
               selectedProvider === p.id
                 ? "border-primary bg-primary/10 text-primary"
@@ -157,8 +192,6 @@ function ApiKeySetup({ onSave }: { onSave: (provider: AIProvider, key: string) =
           </button>
         ))}
       </div>
-
-      {/* Key input */}
       <div className="w-full space-y-2">
         <label className="text-xs font-medium text-muted-foreground">
           Clé API {config.label}
@@ -170,14 +203,10 @@ function ApiKeySetup({ onSave }: { onSave: (provider: AIProvider, key: string) =
             onChange={(e) => setKey(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSave()}
             placeholder={config.keyPlaceholder}
-            className="flex-1 bg-transparent px-3 py-2.5 text-sm outline-none"
+            className="flex-1 bg-transparent px-3 py-2.5 text-sm text-foreground outline-none"
             autoComplete="off"
           />
-          <button
-            onClick={() => setShowKey((v) => !v)}
-            className="px-3 text-muted-foreground"
-            type="button"
-          >
+          <button onClick={() => setShowKey((v) => !v)} className="px-3 text-muted-foreground" type="button">
             {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
           </button>
         </div>
@@ -199,7 +228,91 @@ function ApiKeySetup({ onSave }: { onSave: (provider: AIProvider, key: string) =
   );
 }
 
-// ── Main Panel ────────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Smart file apply — match AI-generated code to the right existing file
+// ---------------------------------------------------------------------------
+function smartMatch(
+  parsed: ParsedFile,
+  projectFiles: ProjectFile[],
+  activeFileId: string | null | undefined,
+): ProjectFile | null {
+  const targetPath = parsed.path.toLowerCase();
+
+  // 1. Exact case-insensitive match
+  const exact = projectFiles.find(
+    (f) => f.path.toLowerCase() === targetPath || f.name.toLowerCase() === targetPath,
+  );
+  if (exact) return exact;
+
+  // 2. If it's a snippet or the filename didn't match, try extension-based fallback
+  const ext = parsed.path.split(".").pop()?.toLowerCase() ?? "";
+  const byExt = projectFiles.filter(
+    (f) => f.name.split(".").pop()?.toLowerCase() === ext,
+  );
+
+  // 2a. If the active file has the same extension, prefer it
+  if (activeFileId) {
+    const activeMatch = byExt.find((f) => f.id === activeFileId);
+    if (activeMatch) return activeMatch;
+  }
+
+  // 2b. If only one file with that extension exists, use it
+  if (byExt.length === 1) return byExt[0];
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// File picker modal — shown when there are multiple possible targets
+// ---------------------------------------------------------------------------
+function FilePicker({
+  options,
+  onPick,
+  onCancel,
+}: {
+  options: ProjectFile[];
+  onPick: (file: ProjectFile) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-xs rounded-xl border border-border bg-sidebar shadow-2xl">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <span className="text-sm font-semibold text-foreground">Quel fichier modifier ?</span>
+          <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="p-2">
+          {options.map((f) => (
+            <button
+              key={f.id}
+              onClick={() => onPick(f)}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left text-sm transition hover:bg-secondary"
+            >
+              <FileEdit className="h-4 w-4 shrink-0 text-primary" />
+              <span className="font-mono font-medium text-foreground">{f.name}</span>
+              <span className="ml-auto text-[10px] text-muted-foreground">{f.path}</span>
+            </button>
+          ))}
+          <button
+            onClick={onCancel}
+            className="mt-1 w-full rounded-lg py-2 text-xs text-muted-foreground hover:text-foreground"
+          >
+            Annuler (créer un nouveau fichier)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// We need to import ProviderConfig type for use in JSX below
+import type { ProviderConfig } from "@/lib/ai-client";
+
+// ---------------------------------------------------------------------------
+// Main Panel
+// ---------------------------------------------------------------------------
 export function AIPanel({ project }: { project: Project }) {
   const {
     provider,
@@ -222,6 +335,11 @@ export function AIPanel({ project }: { project: Project }) {
   const [loading, setLoading] = useState(false);
   const [streamingContent, setStreamingContent] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [pickerState, setPickerState] = useState<{
+    options: ProjectFile[];
+    content: string;
+    originalPath: string;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -239,6 +357,7 @@ export function AIPanel({ project }: { project: Project }) {
     [project.files],
   );
 
+  // ── Send message ──────────────────────────────────────────────────────────
   async function send() {
     const text = input.trim();
     if (!text || loading) return;
@@ -253,14 +372,20 @@ export function AIPanel({ project }: { project: Project }) {
 
     try {
       const activeFileContext = activeFile
-        ? `\nFichier actif: ${activeFile.path}\n\`\`\`${activeFile.language}\n${activeFile.content.slice(0, 8000)}\n\`\`\``
+        ? `\nFichier actif ouvert (le fichier que l'utilisateur édite en ce moment): ${activeFile.path}\n\`\`\`${activeFile.language}\n${activeFile.content.slice(0, 8000)}\n\`\`\``
         : "";
 
       const context: ChatMessage[] = [
         { role: "system", content: SYSTEM_PROMPT },
         {
           role: "system",
-          content: `Projet: ${project.name}\nFichiers:\n${fileList}${activeFileContext}`,
+          content: `PROJET: "${project.name}"
+
+FICHIERS EXISTANTS dans ce projet (utilise EXACTEMENT ces noms dans tes blocs de code):
+${fileList}
+${activeFileContext}
+
+RAPPEL CRITIQUE: Si tu modifies un fichier existant, ton bloc de code DOIT avoir le même nom que le fichier dans la liste ci-dessus. Exemple: si App.jsx est dans la liste, le bloc doit être \`\`\`jsx App.jsx`,
         },
         ...messages,
         userMsg,
@@ -294,21 +419,81 @@ export function AIPanel({ project }: { project: Project }) {
     }
   }
 
-  function applyBlock(path: string, content: string) {
-    const existing = project.files.find((f) => f.path === path || f.name === path);
-    if (existing) {
-      updateFile(project.id, existing.id, content);
-      toast.success(`✅ ${path} mis à jour`);
-    } else {
-      addFile(project.id, path);
-      setTimeout(() => {
-        const s = useProjectStore.getState();
-        const p = s.projects.find((pp) => pp.id === project.id);
-        const f = p?.files.find((ff) => ff.name === path || ff.path === path);
-        if (f) s.updateFile(project.id, f.id, content);
-      }, 0);
-      toast.success(`✅ ${path} créé`);
+  // ── Smart apply: tries to update existing file before creating new one ────
+  function applyBlock(parsed: ParsedFile) {
+    const { path, content, isSnippet } = parsed;
+
+    // Find best matching existing file
+    const match = smartMatch(parsed, project.files, editors?.activeFileId);
+
+    if (match) {
+      // Exact or auto-match → update directly
+      updateFile(project.id, match.id, content);
+      const label = match.path !== path ? `${match.name} (correspondance auto)` : match.name;
+      toast.success(`✅ ${label} mis à jour`);
+      return;
     }
+
+    // Multiple files with same extension → show picker
+    const ext = path.split(".").pop()?.toLowerCase() ?? "";
+    const byExt = project.files.filter(
+      (f) => f.name.split(".").pop()?.toLowerCase() === ext,
+    );
+    if (isSnippet && byExt.length > 1) {
+      setPickerState({ options: byExt, content, originalPath: path });
+      return;
+    }
+
+    // No match — create new file
+    addFile(project.id, path);
+    setTimeout(() => {
+      const s = useProjectStore.getState();
+      const p = s.projects.find((pp) => pp.id === project.id);
+      const f = p?.files.find((ff) => ff.name === path || ff.path === path);
+      if (f) s.updateFile(project.id, f.id, content);
+    }, 0);
+    toast.success(`✅ ${path} créé`);
+  }
+
+  function confirmPick(file: ProjectFile) {
+    if (!pickerState) return;
+    updateFile(project.id, file.id, pickerState.content);
+    toast.success(`✅ ${file.name} mis à jour`);
+    setPickerState(null);
+  }
+
+  function cancelPick() {
+    if (!pickerState) return;
+    // Create as new file instead
+    const { content, originalPath } = pickerState;
+    addFile(project.id, originalPath);
+    setTimeout(() => {
+      const s = useProjectStore.getState();
+      const p = s.projects.find((pp) => pp.id === project.id);
+      const f = p?.files.find((ff) => ff.name === originalPath || ff.path === originalPath);
+      if (f) s.updateFile(project.id, f.id, content);
+    }, 0);
+    toast.success(`✅ ${originalPath} créé`);
+    setPickerState(null);
+  }
+
+  // ── Derived: label for apply button ──────────────────────────────────────
+  function getApplyLabel(parsed: ParsedFile): string {
+    const match = smartMatch(parsed, project.files, editors?.activeFileId);
+    if (match) {
+      const isAuto = match.path.toLowerCase() !== parsed.path.toLowerCase();
+      return isAuto
+        ? `Mettre à jour ${match.name} ↗`
+        : `Mettre à jour ${match.name}`;
+    }
+    if (parsed.isSnippet) {
+      const ext = parsed.path.split(".").pop()?.toLowerCase() ?? "";
+      const byExt = project.files.filter(
+        (f) => f.name.split(".").pop()?.toLowerCase() === ext,
+      );
+      if (byExt.length > 1) return `Choisir le fichier .${ext} à modifier…`;
+    }
+    return `Créer ${parsed.path}`;
   }
 
   // No API key — show setup screen
@@ -325,6 +510,15 @@ export function AIPanel({ project }: { project: Project }) {
 
   return (
     <div className="flex h-full flex-col">
+      {/* File picker modal */}
+      {pickerState && (
+        <FilePicker
+          options={pickerState.options}
+          onPick={confirmPick}
+          onCancel={cancelPick}
+        />
+      )}
+
       {/* Header */}
       <div className="flex h-9 shrink-0 items-center justify-between border-b border-border px-3 text-xs uppercase tracking-wider text-muted-foreground">
         <span className="flex items-center gap-1.5">
@@ -353,40 +547,36 @@ export function AIPanel({ project }: { project: Project }) {
       {showSettings && (
         <div className="shrink-0 border-b border-border bg-sidebar/60 p-3 text-xs">
           <div className="space-y-3">
-            {/* Provider */}
             <div>
               <label className="mb-1 block text-muted-foreground">Fournisseur</label>
               <div className="grid grid-cols-2 gap-1.5">
-                {(Object.values(PROVIDER_CONFIGS) as typeof PROVIDER_CONFIGS[AIProvider][]).map(
-                  (p) => {
-                    const hasKey = !!apiKeys[p.id]?.trim();
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() => setProvider(p.id)}
-                        className={`flex items-center gap-1.5 rounded border px-2 py-1.5 text-left transition ${
-                          provider === p.id
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-border bg-background text-muted-foreground hover:border-primary/30"
-                        }`}
-                      >
-                        <span>{PROVIDER_ICONS[p.id]}</span>
-                        <span className="flex-1 truncate text-[10px]">{p.label}</span>
-                        {hasKey && <Check className="h-2.5 w-2.5 text-green-400" />}
-                      </button>
-                    );
-                  },
-                )}
+                {(Object.values(PROVIDER_CONFIGS) as ProviderConfig[]).map((p) => {
+                  const hasKey = !!apiKeys[p.id]?.trim();
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => setProvider(p.id)}
+                      className={`flex items-center gap-1.5 rounded border px-2 py-1.5 text-left transition ${
+                        provider === p.id
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-background text-muted-foreground hover:border-primary/30"
+                      }`}
+                    >
+                      <span>{PROVIDER_ICONS[p.id]}</span>
+                      <span className="flex-1 truncate text-[10px]">{p.label}</span>
+                      {hasKey && <Check className="h-2.5 w-2.5 text-green-400" />}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Model */}
             <div>
               <label className="mb-1 block text-muted-foreground">Modèle ({config.label})</label>
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
-                className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs outline-none"
+                className="w-full rounded border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none"
               >
                 {config.models.map((m) => (
                   <option key={m.value} value={m.value}>
@@ -396,13 +586,11 @@ export function AIPanel({ project }: { project: Project }) {
               </select>
             </div>
 
-            {/* API key management */}
             <div>
               <label className="mb-1 block text-muted-foreground">Clés API configurées</label>
               <div className="space-y-1">
                 {(Object.keys(PROVIDER_CONFIGS) as AIProvider[]).map((prov) => {
-                  const hasKey = !!apiKeys[prov]?.trim();
-                  if (!hasKey) return null;
+                  if (!apiKeys[prov]?.trim()) return null;
                   return (
                     <div
                       key={prov}
@@ -416,7 +604,6 @@ export function AIPanel({ project }: { project: Project }) {
                       <button
                         onClick={() => removeApiKey(prov)}
                         className="text-muted-foreground hover:text-destructive"
-                        aria-label={`Supprimer clé ${prov}`}
                       >
                         <X className="h-3 w-3" />
                       </button>
@@ -426,7 +613,6 @@ export function AIPanel({ project }: { project: Project }) {
               </div>
             </div>
 
-            {/* Add key for current provider if not set */}
             {!apiKeys[provider]?.trim() && (
               <AddKeyInline provider={provider} onSave={(key) => setApiKey(provider, key)} />
             )}
@@ -434,7 +620,7 @@ export function AIPanel({ project }: { project: Project }) {
         </div>
       )}
 
-      {/* Active file context badge */}
+      {/* Active file badge */}
       {activeFile && (
         <div className="shrink-0 border-b border-border bg-primary/5 px-3 py-1.5 text-[10px] text-primary">
           Contexte: <span className="font-mono font-semibold">{activeFile.name}</span>
@@ -453,10 +639,10 @@ export function AIPanel({ project }: { project: Project }) {
             </p>
             <p>Quelques idées :</p>
             {[
-              "Crée un composant Button en React",
+              "Crée une page d'accueil avec design pro",
+              "Modifie App.jsx pour ajouter une navbar",
+              "Améliore le CSS avec un design moderne",
               "Corrige les bugs dans ce fichier",
-              "Explique ce code et améliore-le",
-              "Ajoute un formulaire de connexion",
             ].map((s) => (
               <button
                 key={s}
@@ -470,9 +656,15 @@ export function AIPanel({ project }: { project: Project }) {
         ) : (
           <div className="space-y-3">
             {messages.map((m, i) => (
-              <MessageBubble key={i} m={m} onApply={applyBlock} />
+              <MessageBubble
+                key={i}
+                m={m}
+                projectFiles={project.files}
+                activeFileId={editors?.activeFileId}
+                onApply={applyBlock}
+                getLabel={getApplyLabel}
+              />
             ))}
-            {/* Streaming message (live) */}
             {streamingContent && (
               <div className="rounded-lg border border-border bg-secondary/40 p-2.5 text-xs">
                 <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase text-primary">
@@ -497,7 +689,7 @@ export function AIPanel({ project }: { project: Project }) {
                 send();
               }
             }}
-            placeholder={`Demande à Copilot… (↵ envoyer)`}
+            placeholder="Demande à Copilot… (↵ envoyer)"
             rows={2}
             disabled={loading}
             className="min-h-[40px] flex-1 resize-none rounded border border-border bg-background p-2 text-sm text-foreground outline-none focus:border-primary disabled:opacity-50"
@@ -506,14 +698,10 @@ export function AIPanel({ project }: { project: Project }) {
             onClick={loading ? () => abortRef.current?.abort() : send}
             className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-primary-foreground transition ${
               loading ? "bg-destructive" : "bg-primary"
-            } disabled:opacity-50`}
+            }`}
             aria-label={loading ? "Stop" : "Send"}
           >
-            {loading ? (
-              <span className="text-lg font-bold">■</span>
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
+            {loading ? <span className="text-lg font-bold">■</span> : <Send className="h-4 w-4" />}
           </button>
         </div>
       </div>
@@ -521,7 +709,9 @@ export function AIPanel({ project }: { project: Project }) {
   );
 }
 
-// ── Inline Add Key ─────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Inline add key (in settings)
+// ---------------------------------------------------------------------------
 function AddKeyInline({
   provider,
   onSave,
@@ -535,16 +725,14 @@ function AddKeyInline({
 
   return (
     <div className="space-y-1.5">
-      <label className="block text-muted-foreground">
-        Ajouter clé {config.label}
-      </label>
+      <label className="block text-muted-foreground">Ajouter clé {config.label}</label>
       <div className="flex items-center overflow-hidden rounded-lg border border-border bg-background">
         <input
           type={showKey ? "text" : "password"}
           value={key}
           onChange={(e) => setKey(e.target.value)}
           placeholder={config.keyPlaceholder}
-          className="flex-1 bg-transparent px-2.5 py-2 text-xs outline-none"
+          className="flex-1 bg-transparent px-2.5 py-2 text-xs text-foreground outline-none"
           autoComplete="off"
         />
         <button onClick={() => setShowKey((v) => !v)} className="px-2 text-muted-foreground">
@@ -552,10 +740,7 @@ function AddKeyInline({
         </button>
       </div>
       <button
-        onClick={() => {
-          const t = key.trim();
-          if (t) onSave(t);
-        }}
+        onClick={() => { const t = key.trim(); if (t) onSave(t); }}
         disabled={!key.trim()}
         className="flex w-full items-center justify-center gap-1 rounded bg-primary py-1.5 text-[11px] font-semibold text-primary-foreground disabled:opacity-40"
       >
@@ -565,16 +750,24 @@ function AddKeyInline({
   );
 }
 
-// ── Message Bubble ─────────────────────────────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Message Bubble
+// ---------------------------------------------------------------------------
 function MessageBubble({
   m,
+  projectFiles,
+  activeFileId,
   onApply,
+  getLabel,
 }: {
   m: ChatMessage;
-  onApply: (path: string, content: string) => void;
+  projectFiles: ProjectFile[];
+  activeFileId: string | null | undefined;
+  onApply: (parsed: ParsedFile) => void;
+  getLabel: (parsed: ParsedFile) => string;
 }) {
   const isUser = m.role === "user";
-  const files = m.role === "assistant" ? extractFiles(m.content) : [];
+  const parsedFiles: ParsedFile[] = m.role === "assistant" ? extractFiles(m.content) : [];
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -603,18 +796,30 @@ function MessageBubble({
           ) : (
             <MarkdownContent content={m.content} />
           )}
-          {files.length > 0 && (
+          {parsedFiles.length > 0 && (
             <div className="mt-2 space-y-1">
-              {files.map((f, i) => (
-                <button
-                  key={i}
-                  onClick={() => onApply(f.path, f.content)}
-                  className="flex w-full items-center gap-1.5 rounded border border-primary/40 bg-primary/10 px-2 py-1 text-left text-[11px] text-primary hover:bg-primary/20"
-                >
-                  <FilePlus className="h-3 w-3 shrink-0" />
-                  <span className="truncate">Appliquer → {f.path}</span>
-                </button>
-              ))}
+              {parsedFiles.map((f, i) => {
+                const label = getLabel(f);
+                const isUpdate = label.startsWith("Mettre à jour");
+                return (
+                  <button
+                    key={i}
+                    onClick={() => onApply(f)}
+                    className={`flex w-full items-center gap-1.5 rounded border px-2 py-1.5 text-left text-[11px] transition ${
+                      isUpdate
+                        ? "border-green-500/40 bg-green-500/10 text-green-400 hover:bg-green-500/20"
+                        : "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20"
+                    }`}
+                  >
+                    {isUpdate ? (
+                      <RefreshCw className="h-3 w-3 shrink-0" />
+                    ) : (
+                      <FilePlus className="h-3 w-3 shrink-0" />
+                    )}
+                    <span className="truncate font-medium">{label}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>

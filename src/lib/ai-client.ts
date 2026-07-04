@@ -1,5 +1,5 @@
 export type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
-export type ParsedFile = { path: string; content: string };
+export type ParsedFile = { path: string; content: string; isSnippet: boolean };
 export type AIProvider = "openai" | "groq" | "gemini" | "claude";
 
 export interface ProviderConfig {
@@ -144,7 +144,6 @@ async function streamClaude(
   onChunk: (delta: string) => void,
   signal: AbortSignal | undefined,
 ): Promise<string> {
-  // Extract system messages and user/assistant turns
   const systemMessages = messages.filter((m) => m.role === "system");
   const conversationMessages = messages.filter((m) => m.role !== "system");
   const systemText = systemMessages.map((m) => m.content).join("\n\n");
@@ -235,24 +234,69 @@ export async function chatCompleteStream(
 }
 
 // ---------------------------------------------------------------------------
-// Parse fenced code blocks with filename hints from AI responses
-// \`\`\`lang path/to/file.ext
-// ...code...
-// \`\`\`
+// Helpers for smart filename extraction
+// ---------------------------------------------------------------------------
+
+/** Look for a filename in the first comment line inside a code block.
+ *  e.g. "// App.jsx", "/* App.css *\/", "# script.py"
+ */
+function filenameFromCodeComment(code: string): string | null {
+  const firstLine = code.split("\n")[0].trim();
+  const m = firstLine.match(/^(?:\/\/|\/\*|#)\s*([\w./\-]+\.[a-zA-Z0-9]{1,10})\b/);
+  return m ? m[1] : null;
+}
+
+/** Look backwards in the prose text just before a code fence for a filename mention.
+ *  e.g. "Voici `App.jsx` :", "modifie App.css :", "dans le fichier index.html"
+ */
+function filenameFromTextBefore(text: string): string | null {
+  // Take last 200 chars before the fence (avoids false positives from far away)
+  const nearby = text.slice(-200);
+  // Backtick-quoted filenames get priority: `App.jsx`
+  const backtick = nearby.match(/`([\w./\-]+\.[a-zA-Z0-9]{1,10})`[^`]*$/);
+  if (backtick) return backtick[1];
+  // Bare filenames followed by " :", colon, or end of line
+  const bare = nearby.match(/([\w]+\.[a-zA-Z0-9]{1,10})(?:\s*[:\-]|\s*$)/m);
+  if (bare) return bare[1];
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Parse fenced code blocks from AI responses with smart filename detection
 // ---------------------------------------------------------------------------
 export function extractFiles(markdown: string): ParsedFile[] {
   const out: ParsedFile[] = [];
-  const re =
-    /(?:^|\n)(?:[^\n]*?[`*]{0,3}\s*([\w./\-]+\.[a-zA-Z0-9]+)[`*]{0,3}[^\n]*\n)?```([\w+-]*)(?:\s+([\w./\-]+\.[a-zA-Z0-9]+))?\n([\s\S]*?)```/g;
+  // Match ```lang [filename]\n...``` blocks
+  const blockRe = /```([\w+-]*)(?:\s+([\w./\-]+\.[a-zA-Z0-9]{1,10}))?\n([\s\S]*?)```/g;
   let m: RegExpExecArray | null;
-  let idx = 0;
-  while ((m = re.exec(markdown)) !== null) {
-    const hinted = m[3] || m[1];
-    const lang = m[2] || "";
-    const content = m[4] ?? "";
-    const path = hinted || `snippet-${++idx}.${extForLang(lang)}`;
-    out.push({ path, content });
+  let snippetIdx = 0;
+
+  while ((m = blockRe.exec(markdown)) !== null) {
+    const lang = m[1] || "";
+    const inlineFilename = m[3]; // name written on the fence line
+    const codeContent = m[2] ?? "";
+
+    // --- Priority order for filename ---
+    // 1. Filename on the fence line: ```jsx App.jsx
+    let filename = inlineFilename ?? null;
+
+    // 2. Look at text before this code block
+    if (!filename) {
+      const textBefore = markdown.slice(0, m.index);
+      filename = filenameFromTextBefore(textBefore);
+    }
+
+    // 3. Look for a comment on the first line of the code
+    if (!filename) {
+      filename = filenameFromCodeComment(codeContent);
+    }
+
+    const isSnippet = !filename;
+    const finalPath = filename ?? `snippet-${++snippetIdx}.${extForLang(lang)}`;
+
+    out.push({ path: finalPath, content: codeContent, isSnippet });
   }
+
   return out;
 }
 
